@@ -29,6 +29,8 @@
 //! This module provides some utility functions that are common to quiche
 //! applications.
 
+use std::fs::File;
+use std::io::SeekFrom;
 use std::io::prelude::*;
 
 use std::collections::HashMap;
@@ -898,6 +900,7 @@ impl Http3Conn {
         let mut path = None;
         let mut method = None;
         let mut priority = vec![];
+        let mut range = None;
 
         // Parse some of the request headers.
         for hdr in request {
@@ -957,9 +960,14 @@ impl Http3Conn {
 
                 b"host" => host = Some(std::str::from_utf8(hdr.value()).unwrap()),
 
+                // JHERBOTS range header here
+                b"range" => range = quiche::h3::Range::try_from(std::str::from_utf8(hdr.value()).unwrap()).ok(),
+
                 _ => (),
             }
         }
+
+        info!("JHERBOTS {:?}", range);
 
         let decided_method = match method {
             Some(method) => {
@@ -1088,25 +1096,49 @@ impl Http3Conn {
                         file_path.push(v)
                     }
                 }
+                
+                if range.is_some() {
+                    match File::open(file_path.as_path()) {
+                        Ok(mut file) => {
+                            let mut data: Vec<u8> = vec![];
+                            let mime = mime_guess2::from_path(file_path.as_path()).first_or_text_plain();
+                            for r in range.unwrap().ranges {
+                                file.seek(SeekFrom::Start(r.first_pos));
+                                let mut partial_data: Vec<u8> = vec![0; (r.last_pos-r.first_pos+1) as usize]; // https://stackoverflow.com/questions/47786322/why-is-type-conversion-from-u64-to-usize-allowed-using-as-but-not-from
+                                file.read_exact(&mut partial_data);
+                                data.append(&mut format!("\r\n--QUICHE_MAXR--\r\nContent-Type: {}\r\nContent-Range: bytes {}-{}\r\n\r\n", mime.essence_str(), r.first_pos, r.last_pos).as_bytes().to_vec());
+                                data.append(&mut partial_data);
 
-                match std::fs::read(file_path.as_path()) {
-                    Ok(data) => (200, data),
+                                // JHERBOTS TODO: Check if satisfiable and fail with 416 (Not required in this subset though)
+                            } 
+                            (206, data)
+                        } 
 
-                    Err(_) => (404, b"Not Found!".to_vec()),
+                        Err(_) => (404, b"Not Found!".to_vec()),
+                    }
+                } else {
+                    match std::fs::read(file_path.as_path()) {
+                        Ok(data) => (200, data), // Expand with range requests here
+
+                        Err(_) => (404, b"Not Found!".to_vec()),
+                    }
                 }
             },
 
             _ => (405, Vec::new()),
         };
 
-        let headers = vec![
+        let mut headers = vec![
             quiche::h3::Header::new(b":status", status.to_string().as_bytes()),
             quiche::h3::Header::new(b"server", b"quiche"),
-            quiche::h3::Header::new(
-                b"content-length",
-                body.len().to_string().as_bytes(),
-            ),
+            quiche::h3::Header::new(b"content-length", body.len().to_string().as_bytes())
         ];
+
+        if status == 200 {
+            headers.push(quiche::h3::Header::new(b"Content-Type", mime_guess2::from_path(file_path.as_path()).first_or_text_plain().essence_str().as_bytes()));
+        } else if status == 206 {
+            headers.push(quiche::h3::Header::new(b"Content-Type", b"multipart/byteranges; boundary=QUICHE_MAXR"));
+        }
 
         Ok((headers, body, priority))
     }

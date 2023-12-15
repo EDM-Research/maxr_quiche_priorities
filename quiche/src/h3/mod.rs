@@ -798,6 +798,53 @@ impl TryFrom<&[u8]> for Priority {
     }
 }
 
+// JHERBOTS Range header struct & parsing here
+// Subset implementation of RFC9110 byte ranges
+#[derive(Debug)]
+pub struct Range {
+    pub ranges: Vec<ByteRange>,
+}
+#[derive(Debug)]
+pub struct ByteRange {
+    pub first_pos: u64,
+    pub last_pos: u64,
+}
+
+impl TryFrom<&str> for Range {
+    type Error = crate::h3::Error;
+
+    fn try_from(header: &str) -> std::prelude::v1::Result<Self, Self::Error> {
+        error!("{:?}", header);
+        if let Some((range_type, range_values)) = header.split_once("=") {
+            if range_type.is_empty() || range_type != "bytes" ||range_values.is_empty() {
+                return Err(Error::Done) // Range is malformed or does not match our subset
+            }
+            let mut parse_errors = vec![]; // Collect them, we might want this for debugging later?
+            let ranges = range_values.split(",").map(|r| ByteRange::try_from(r.trim())).filter_map(|r| r.map_err(|e| parse_errors.push(e)).ok()).collect();
+            if parse_errors.is_empty() {
+                return Ok(Range{ranges});
+            }
+        }
+        return Err(Error::Done);
+    }
+}
+
+impl TryFrom<&str> for ByteRange {
+    type Error = crate::h3::Error;
+
+    fn try_from(byterange: &str) -> std::prelude::v1::Result<Self, Self::Error> {
+        error!("{:?}", byterange);
+        if let Some((first_str, last_str)) = byterange.split_once("-") {
+            let first_pos = first_str.parse::<u64>();
+            let last_pos = last_str.parse::<u64>();
+            if first_pos.is_ok() && last_pos.is_ok() {
+                return Ok(ByteRange{first_pos: first_pos.unwrap(), last_pos: last_pos.unwrap()})
+            }
+        } 
+        Err(Error::Done)
+    }
+}
+
 struct ConnectionSettings {
     pub max_field_section_size: Option<u64>,
     pub qpack_max_table_capacity: Option<u64>,
@@ -2467,6 +2514,8 @@ impl Connection {
                     q.add_event_data_now(ev_data).ok();
                 });
 
+                // JHERBOTS search for priority?
+
                 let has_body = !conn.stream_finished(stream_id);
 
                 return Ok((stream_id, Event::Headers {
@@ -2642,6 +2691,8 @@ impl Connection {
 
                     return Err(Error::IdError);
                 }
+
+                // JHERBOTS disable for our use-case?
 
                 // If the PRIORITY_UPDATE is valid, consider storing the latest
                 // contents. Due to reordering, it is possible that we might
