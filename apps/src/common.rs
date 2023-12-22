@@ -1460,19 +1460,25 @@ impl HttpConn for Http3Conn {
                             },
                         };
 
-                    match self.h3_conn.take_last_priority_update(stream_id) {
-                        Ok(v) => {
-                            priority = v;
-                        },
+                    // JHERBOTS: Disabling the following lines, messes with how quiche sets priorities.
+                    // Basically disabling the whole priority system based on frames, if I understand correctly.
+                    // Since our POC -only- uses HTTP headers, this works perfectly fine in our case.
+                    // Header priority is retrieved above with build_h3_response(...)
+                    // Browser behavior is: GET request with a priority header followed by a priority frame, this overrides our settings
 
-                        Err(quiche::h3::Error::Done) => (),
+                    // match self.h3_conn.take_last_priority_update(stream_id) {
+                    //     Ok(v) => {
+                    //         priority = v;
+                    //     },
 
-                        Err(e) => error!(
-                            "{} error taking PRIORITY_UPDATE {}",
-                            conn.trace_id(),
-                            e
-                        ),
-                    }
+                    //     Err(quiche::h3::Error::Done) => (),
+
+                    //     Err(e) => error!(
+                    //         "{} error taking PRIORITY_UPDATE {}",
+                    //         conn.trace_id(),
+                    //         e
+                    //     ),
+                    // }
 
                     if !priority.is_empty() {
                         headers.push(quiche::h3::Header::new(
@@ -1480,6 +1486,12 @@ impl HttpConn for Http3Conn {
                             priority.as_slice(),
                         ));
                     }
+
+                    // JHERBOTS insert custom h3_stream_id header
+                    headers.push(quiche::h3::Header::new(
+                        b"h3_stream_id",
+                        stream_id.to_string().as_bytes(),
+                    ));
 
                     #[cfg(feature = "sfv")]
                     let priority =

@@ -2514,7 +2514,26 @@ impl Connection {
                     q.add_event_data_now(ev_data).ok();
                 });
 
-                // JHERBOTS search for priority?
+                // JHERBOTS
+                // Since we cannot control the priority midflight with priority frames from a browser context
+                // Our POC sets them with a priority header on any requested resource (existent or non-existent) via the "update_priority" header
+                // update_priority: stream_id|u=?, i
+                for header in &headers {
+                    match header.name() {
+                        b"priority" => (),
+                        b"update_priority" => {
+                            info!("Custom update_priority header found on request [{:?}]", header);
+                            if let Some((update_streamd_id_str, priority_str)) = std::str::from_utf8(header.value()).unwrap().split_once("|") {
+                                let update_stream_id: u64 = update_streamd_id_str.parse().unwrap(); 
+                                match Priority::try_from(priority_str.as_bytes()) {
+                                    Ok(v) => drop(conn.stream_priority(update_stream_id, v.urgency, v.incremental)),
+                                    Err(_) => warn!("Failed setting custom update_priority, could not parse priority string [{:?}]", priority_str),
+                                };
+                            }
+                        }
+                        _ => (),
+                    }
+                }
 
                 let has_body = !conn.stream_finished(stream_id);
 
